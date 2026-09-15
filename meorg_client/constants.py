@@ -19,3 +19,7 @@ HTTP_STATUS_SUCCESS_RANGE = range(200, 300)
 
 # Production URL
 MEORG_BASE_URL_PROD = "https://modelevaluation.org/api"
+
+# Download settings
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+DOWNLOAD_TIMEOUT = (10, 120)

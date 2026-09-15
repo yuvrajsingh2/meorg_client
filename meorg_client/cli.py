@@ -674,6 +674,54 @@ def cli_model_experiments():
     pass
 
 
+@click.group("dataset", help="Experiment dataset commands.")
+def cli_dataset():
+    pass
+
+
+@click.command("download")
+@click.argument("experiment_id")
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Directory that receives the dataset files.",
+)
+@click.option(
+    "-n",
+    "--threads",
+    type=click.IntRange(min=1),
+    default=4,
+    show_default=True,
+    help="Number of parallel download threads.",
+)
+@click.option(
+    "--no-resume",
+    is_flag=True,
+    help="Restart partial transfers instead of sending Range requests.",
+)
+def dataset_download(
+    experiment_id: str, output_dir: Path, threads: int, no_resume: bool
+):
+    """Download the dataset files for EXPERIMENT_ID."""
+    client = _get_client()
+    summary = _call(
+        client.download_experiment_datasets,
+        experiment_id=experiment_id,
+        output_dir=output_dir,
+        n=threads,
+        resume=not no_resume,
+        progress=True,
+    )
+    click.echo(
+        f"Downloaded files: {len(summary['downloaded'])}. "
+        f"Already complete: {len(summary['skipped'])}."
+    )
+    click.echo(summary["outputDir"])
+    return summary
+
+
 # Add file commands
 cli_file.add_command(file_list)
 cli_file.add_command(file_upload)
@@ -701,6 +749,9 @@ cli_model_benchmark.add_command(model_output_benchmarks_replace)
 cli_model_experiments.add_command(model_output_experiments_extend)
 cli_model_experiments.add_command(model_output_experiment_delete)
 
+# Dataset commands
+cli_dataset.add_command(dataset_download)
+
 # Add subparsers to the master
 cli.add_command(cli_endpoints)
 cli.add_command(cli_file)
@@ -709,6 +760,7 @@ cli.add_command(initialise)
 cli.add_command(cli_model_output)
 cli.add_command(cli_model_benchmark)
 cli.add_command(cli_model_experiments)
+cli.add_command(cli_dataset)
 
 
 if __name__ == "__main__":

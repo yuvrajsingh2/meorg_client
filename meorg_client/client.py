@@ -11,6 +11,7 @@ import meorg_client.endpoints as endpoints
 import meorg_client.exceptions as mx
 import meorg_client.utilities as mu
 import meorg_client.parallel as meop
+import meorg_client.downloads as med
 import mimetypes as mt
 from pathlib import Path
 from tqdm import tqdm
@@ -228,6 +229,63 @@ class Client:
         if response.status_code == 200:
             self.headers.pop("X-User-Id", None)
             self.headers.pop("X-Auth-Token", None)
+
+    def get_experiment_dataset_manifest(self, experiment_id: str) -> dict:
+        """Get download metadata and signed URLs for an experiment's datasets.
+
+        Parameters
+        ----------
+        experiment_id : str
+            Experiment instance ID.
+
+        Returns
+        -------
+        dict
+            The dataset download manifest.
+        """
+        return self._make_request(
+            method=mcc.HTTP_GET,
+            endpoint=endpoints.EXPERIMENT_DATASET_MANIFEST,
+            url_path_fields={"id": experiment_id},
+        )
+
+    def download_experiment_datasets(
+        self,
+        experiment_id: str,
+        output_dir: Union[str, Path],
+        n: int = 4,
+        progress: bool = True,
+        resume: bool = True,
+    ) -> dict:
+        """Download all dataset files for an experiment.
+
+        Parameters
+        ----------
+        experiment_id : str
+            Experiment instance ID.
+        output_dir : path-like
+            Directory that receives the manifest files.
+        n : int, optional
+            Number of parallel download threads, by default 4.
+        progress : bool, optional
+            Show a progress bar, by default True.
+        resume : bool, optional
+            Resume partial files, by default True.
+
+        Returns
+        -------
+        dict
+            Download summary with downloaded and skipped file paths.
+        """
+        return med.download_experiment_datasets(
+            self,
+            experiment_id=experiment_id,
+            output_dir=output_dir,
+            n=n,
+            progress=progress,
+            resume=resume,
+        )
+
 
     def _upload_files_parallel(
         self,

@@ -196,6 +196,29 @@ Where `$PATH` is the local path to the file.
 
 This command will return a `$FILE_ID` upon success.
 
+### dataset download
+
+Download all forcing dataset files for an experiment instance:
+
+```shell
+meorg dataset download "$EXPERIMENT_ID" --output-dir ./forcing-data --threads 4
+```
+
+The command writes each file to `$OUTPUT_DIR/$RELATIVE_PATH`. The default output
+directory is the current directory.
+
+The command uses four download threads by default. Set `--threads` (or `-n`) to change
+this value.
+
+Partial files have a `.part` suffix and include the file ID. Run the same command again
+to resume these files with HTTP Range requests.
+
+Use `--no-resume` to restart partial transfers from byte zero. The client validates
+each final file against the size in the manifest.
+
+The client requests one new manifest when a signed URL expires. The command stops if
+the replacement URL also fails.
+
 ### initialise
 
 A simple helper command to write the user credentials file for password-less interaction with the client over the command-line. See above.

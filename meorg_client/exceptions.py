@@ -30,3 +30,22 @@ class InvalidHTTPMethodException(Exception):
 
     def __init__(self, method):
         super().__init__(f"Invalid HTTP Method {method}.")
+
+
+class DownloadException(Exception):
+    """Raised when a download driven by a manifest cannot complete.
+
+    Parameters
+    ----------
+    message : str
+        Message safe to show the user. It must never contain a signed URL or an
+        object store path.
+    """
+
+    def __init__(self, message):
+        self.msg = message
+        super().__init__(message)
+
+
+class ManifestExpiredException(DownloadException):
+    """Raised when an object store rejects an expired signed URL."""
