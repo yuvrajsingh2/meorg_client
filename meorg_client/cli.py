@@ -4,6 +4,8 @@ import click
 from meorg_client.client import Client
 import meorg_client.utilities as mcu
 import meorg_client.constants as mcc
+import meorg_client.analysis as mea
+import meorg_client.exceptions as mx
 from meorg_client import __version__
 import json
 import os
@@ -582,6 +584,154 @@ def model_output_delete(model_id: str):
             click.echo(f"Operation status: {response.get('status')}")
 
 
+def _analysis_call(func: callable, **kwargs):
+    """Run an external analysis command and exit 1 with a clear message on failure.
+
+    Unlike `_call`, this never shows a traceback, even in dev mode, because a
+    chained transfer error can hold a signed URL.
+    """
+    try:
+        return func(**kwargs)
+    except (
+        mx.AnalysisException,
+        mx.DownloadException,
+        mx.RequestException,
+        ValueError,
+    ) as ex:
+        click.echo(getattr(ex, "msg", str(ex)), err=True)
+        sys.exit(1)
+
+
+@click.command("input")
+@click.argument("model_output_id")
+@click.argument("experiment_id")
+@click.argument("extra_model_output_files", nargs=-1, metavar="")
+@click.option("--run-id", required=True, help="External run ID, written as _id.")
+@click.option(
+    "--cache",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Writable cache root.",
+)
+@click.option(
+    "--cache-ro",
+    multiple=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Read-only cache root. Repeatable. Searched before --cache, never written.",
+)
+@click.option(
+    "--model-output-files",
+    multiple=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Local files for model output 1: --model-output-files FILE [FILE ...].",
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path("input.json"),
+    show_default=True,
+    help="Path of the input.json to write.",
+)
+@click.option(
+    "-n",
+    "--threads",
+    type=click.IntRange(min=1),
+    default=4,
+    show_default=True,
+    help="Number of parallel downloads.",
+)
+def analysis_input(
+    model_output_id: str,
+    experiment_id: str,
+    extra_model_output_files: tuple,
+    run_id: str,
+    cache: Path,
+    cache_ro: tuple,
+    model_output_files: tuple,
+    output: Path,
+    threads: int,
+):
+    """
+    Write the input.json for an analysis of MODEL_OUTPUT_ID in EXPERIMENT_ID.
+
+    Input files are cached by object key under --cache (and the --cache-ro
+    roots). Only missing files are downloaded. Prints the path of input.json.
+    """
+    # "--model-output-files a.nc b.nc" gives click one option value and extra
+    # arguments, so collect both.
+    if extra_model_output_files and not model_output_files:
+        raise click.UsageError(
+            f"Unexpected argument: {extra_model_output_files[0]}. "
+            "Put model output files after --model-output-files."
+        )
+    files = list(model_output_files) + list(extra_model_output_files)
+
+    client = _get_client()
+    summary = _analysis_call(
+        client.prepare_analysis_input,
+        model_output_id=model_output_id,
+        experiment_id=experiment_id,
+        run_id=run_id,
+        cache=cache,
+        cache_ro=list(cache_ro),
+        model_output_files=files,
+        n=threads,
+        progress=sys.stderr.isatty(),
+    )
+    path = _analysis_call(mea.write_input_json, document=summary["input"], output=output)
+    click.echo(
+        f"Input files: {len(summary['input']['files'])}. "
+        f"Downloaded objects: {summary['downloaded']}. "
+        f"Cached objects: {summary['cached']}.",
+        err=True,
+    )
+    click.echo(str(path))
+
+
+@click.command("submit-result")
+@click.argument("model_output_id")
+@click.argument("experiment_id")
+@click.argument("run_dir", type=click.Path(file_okay=False, path_type=Path))
+@click.option(
+    "--input",
+    "input_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="The input.json of the run. Default: RUN_DIR/input.json.",
+)
+@click.option("--runner", default="gadi", show_default=True, help="Runner name.")
+@click.option("--orchestrator", default=None, help="Orchestrator name, e.g. benchcab.")
+def analysis_submit_result(
+    model_output_id: str,
+    experiment_id: str,
+    run_dir: Path,
+    input_path: Path,
+    runner: str,
+    orchestrator: str,
+):
+    """
+    Submit the meorg-run result in RUN_DIR for MODEL_OUTPUT_ID and EXPERIMENT_ID.
+
+    Prints the analysis ID.
+    """
+    client = _get_client()
+    result = _analysis_call(
+        client.submit_analysis_result,
+        model_output_id=model_output_id,
+        experiment_id=experiment_id,
+        run_dir=run_dir,
+        input_path=input_path,
+        runner=runner,
+        orchestrator=orchestrator,
+    )
+    for warning in result["warnings"]:
+        click.echo(f"Warning: {warning}", err=True)
+    if result.get("created") is False:
+        click.echo("This result was already stored.", err=True)
+    click.echo(result["analysisId"])
+
+
 @click.command("status")
 @click.argument("id")
 def analysis_status(id: str):
@@ -734,6 +884,8 @@ cli_endpoints.add_command(list_endpoints)
 # Add analysis commands
 cli_analysis.add_command(analysis_start)
 cli_analysis.add_command(analysis_status)
+cli_analysis.add_command(analysis_input)
+cli_analysis.add_command(analysis_submit_result)
 
 # Add output command
 cli_model_output.add_command(create_new_model_output)

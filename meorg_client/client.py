@@ -12,6 +12,7 @@ import meorg_client.exceptions as mx
 import meorg_client.utilities as mu
 import meorg_client.parallel as meop
 import meorg_client.downloads as med
+import meorg_client.analysis as mea
 import mimetypes as mt
 from pathlib import Path
 from tqdm import tqdm
@@ -284,6 +285,131 @@ class Client:
             n=n,
             progress=progress,
             resume=resume,
+        )
+
+    def get_analysis_input(self, model_output_id: str, experiment_id: str) -> dict:
+        """Get the input list of an external analysis.
+
+        The response holds signed URLs. Do not log or store it.
+
+        Parameters
+        ----------
+        model_output_id : str
+            Model output ID.
+        experiment_id : str
+            Experiment ID.
+
+        Returns
+        -------
+        dict
+            Response from ME.org.
+        """
+        return self._make_request(
+            method=mcc.HTTP_GET,
+            endpoint=endpoints.ANALYSIS_INPUT,
+            url_path_fields=dict(id=model_output_id, expid=experiment_id),
+        )
+
+    def prepare_analysis_input(
+        self,
+        model_output_id: str,
+        experiment_id: str,
+        run_id: str,
+        cache: Union[str, Path],
+        cache_ro: list = (),
+        model_output_files: list = (),
+        n: int = 4,
+        progress: bool = False,
+    ) -> dict:
+        """Build input.json for an external analysis, filling the cache.
+
+        See `meorg_client.analysis.prepare_analysis_input`.
+        """
+        return mea.prepare_analysis_input(
+            self,
+            model_output_id=model_output_id,
+            experiment_id=experiment_id,
+            run_id=run_id,
+            cache=cache,
+            cache_ro=cache_ro,
+            model_output_files=model_output_files,
+            n=n,
+            progress=progress,
+        )
+
+    def post_analysis_result(
+        self,
+        model_output_id: str,
+        experiment_id: str,
+        outcome: str,
+        external_run_id: str,
+        runner: str,
+        metadata: str,
+        files: list,
+    ) -> dict:
+        """Post one external analysis result (a single attempt).
+
+        Parameters
+        ----------
+        model_output_id : str
+            Model output ID.
+        experiment_id : str
+            Experiment ID.
+        outcome : str
+            ``success`` or ``failure``.
+        external_run_id : str
+            External run ID.
+        runner : str
+            Runner name.
+        metadata : str
+            run.json with client fields, as a JSON string.
+        files : list
+            (part filename, local path) pairs.
+
+        Returns
+        -------
+        dict
+            Response from ME.org.
+        """
+        payload = [
+            ("file", (name, Path(path).read_bytes(), mea.guess_mimetype(name)))
+            for name, path in files
+        ]
+        return self._make_request(
+            method=mcc.HTTP_POST,
+            endpoint=endpoints.ANALYSIS_RESULT,
+            url_path_fields=dict(id=model_output_id, expid=experiment_id),
+            data=dict(
+                outcome=outcome,
+                externalRunId=external_run_id,
+                runner=runner,
+                metadata=metadata,
+            ),
+            files=payload,
+            timeout=mcc.ANALYSIS_RESULT_TIMEOUT,
+        )
+
+    def submit_analysis_result(
+        self,
+        model_output_id: str,
+        experiment_id: str,
+        run_dir: Union[str, Path],
+        input_path: Union[str, Path] = None,
+        runner: str = "gadi",
+        orchestrator: str = None,
+    ) -> dict:
+        """Submit a meorg-run run directory, with retries.
+
+        See `meorg_client.analysis.submit_analysis_result`.
+        """
+        return mea.submit_analysis_result(
+            self,
+            model_output_id=model_output_id,
+            experiment_id=experiment_id,
+            run_dir=run_dir,
+            input_path=input_path,
+            runner=runner,
+            orchestrator=orchestrator,
         )
 
 

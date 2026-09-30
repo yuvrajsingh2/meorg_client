@@ -49,3 +49,17 @@ class DownloadException(Exception):
 
 class ManifestExpiredException(DownloadException):
     """Raised when an object store rejects an expired signed URL."""
+
+
+class AnalysisException(Exception):
+    """Raised when an external analysis input or result cannot be handled.
+
+    Parameters
+    ----------
+    message : str
+        Message safe to show the user. It must never contain a signed URL.
+    """
+
+    def __init__(self, message):
+        self.msg = message
+        super().__init__(message)

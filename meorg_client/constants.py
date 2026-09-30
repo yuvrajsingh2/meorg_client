@@ -23,3 +23,8 @@ MEORG_BASE_URL_PROD = "https://modelevaluation.org/api"
 # Download settings
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 DOWNLOAD_TIMEOUT = (10, 120)
+
+# External analysis results
+ANALYSIS_RESULT_TIMEOUT = (10, 600)
+ANALYSIS_RESULT_RETRIES = 3
+ANALYSIS_RESULT_BACKOFF = 5  # seconds, doubled after each retry

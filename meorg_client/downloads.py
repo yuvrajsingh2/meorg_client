@@ -386,7 +386,11 @@ def _download_file(file_info: dict, resume: bool, bar: Progress) -> dict:
         bar.file_complete()
         return {"path": str(target), "size": expected_size, "skipped": True}
 
-    partial = target.with_name(f"{target.name}.{_part_token(file_id)}.part")
+    # A caller may place the partial file elsewhere, such as a cache's .tmp
+    # directory, so that readers of the target directory never see it.
+    partial = file_info.get("partial") or target.with_name(
+        f"{target.name}.{_part_token(file_id)}.part"
+    )
     if not resume and partial.exists():
         partial.unlink()
     if partial.exists() and partial.stat().st_size > expected_size:
