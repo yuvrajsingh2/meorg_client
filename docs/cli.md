@@ -103,7 +103,7 @@ meorg analysis input $MODEL_OUTPUT_ID $EXPERIMENT_ID \
     --run-id $RUN_ID \
     --cache /scratch/$PROJECT/$USER/meorg-cache \
     [--cache-ro /g/data/.../meorg-cache ...] \
-    [--model-output-files outputs/*.nc] \
+    [--model-output-files "outputs/*.nc" ...] \
     [-o input.json] [-n 4]
 ```
 
@@ -120,6 +120,11 @@ each file in a cache at `<cache root>/<object key>`:
   analysis. They are used in place of the files on ME.org, so you can run the
   analysis before you upload them. Upload them later with `meorg file upload`
   and keep the same file names: ME.org matches them by name and size.
+- `--model-output-files` is repeatable. Each value is a path or a glob
+  pattern. Quote a pattern (`"outputs/*.nc"`) so that the client expands it:
+  the matches of each pattern are sorted, the order of the values is kept, and
+  a pattern that matches nothing is an error. Relative paths are written to
+  `input.json` as absolute paths.
 
 The command writes `input.json` (default `./input.json`) and prints its path.
 The file holds `_id` (the run ID), `config`, and the input `files` with local
@@ -146,14 +151,15 @@ A success sends `output.json`, every file it lists, `output/PALS.log`,
 `run.json` and `input.json`. A failure sends whichever of `output/PALS.log`,
 `r-stderr.log`, `run.json` and `input.json` exist.
 
-The command prints the analysis ID. Sending the same run again is safe: ME.org
+The command prints the analysis ID and exits `0` when ME.org stores the result,
+for a failed run too. Sending the same run again is safe: ME.org
 returns the stored analysis. A different result for the same run ID (`409`) or a
 rejected request (`400`) exits non-zero at once. A network error or a `5xx`
 response is retried 3 times with a growing wait.
 
 ### Run ME.org analyses from your own orchestrator
 
-1. `meorg analysis input MO EXP --run-id ID --cache DIR --model-output-files FILES... -o RUN_DIR/input.json`
+1. `meorg analysis input MO EXP --run-id ID --cache DIR --model-output-files "OUTPUTS/*.nc" -o RUN_DIR/input.json`
    (needs network access).
 2. `MEORG_RUN_ID=ID meorg-run --input RUN_DIR/input.json --run-dir RUN_DIR`
    (no network access needed; schedule it however you like).

@@ -605,7 +605,6 @@ def _analysis_call(func: callable, **kwargs):
 @click.command("input")
 @click.argument("model_output_id")
 @click.argument("experiment_id")
-@click.argument("extra_model_output_files", nargs=-1, metavar="")
 @click.option("--run-id", required=True, help="External run ID, written as _id.")
 @click.option(
     "--cache",
@@ -621,9 +620,13 @@ def _analysis_call(func: callable, **kwargs):
 )
 @click.option(
     "--model-output-files",
+    "model_output_files",
     multiple=True,
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Local files for model output 1: --model-output-files FILE [FILE ...].",
+    metavar="PATH_OR_GLOB",
+    help=(
+        "Local file or quoted glob pattern for model output 1, "
+        'e.g. "outputs/*.nc". Repeatable. A pattern that matches nothing is an error.'
+    ),
 )
 @click.option(
     "-o",
@@ -644,7 +647,6 @@ def _analysis_call(func: callable, **kwargs):
 def analysis_input(
     model_output_id: str,
     experiment_id: str,
-    extra_model_output_files: tuple,
     run_id: str,
     cache: Path,
     cache_ro: tuple,
@@ -658,15 +660,6 @@ def analysis_input(
     Input files are cached by object key under --cache (and the --cache-ro
     roots). Only missing files are downloaded. Prints the path of input.json.
     """
-    # "--model-output-files a.nc b.nc" gives click one option value and extra
-    # arguments, so collect both.
-    if extra_model_output_files and not model_output_files:
-        raise click.UsageError(
-            f"Unexpected argument: {extra_model_output_files[0]}. "
-            "Put model output files after --model-output-files."
-        )
-    files = list(model_output_files) + list(extra_model_output_files)
-
     client = _get_client()
     summary = _analysis_call(
         client.prepare_analysis_input,
@@ -675,7 +668,7 @@ def analysis_input(
         run_id=run_id,
         cache=cache,
         cache_ro=list(cache_ro),
-        model_output_files=files,
+        model_output_files=list(model_output_files),
         n=threads,
         progress=sys.stderr.isatty(),
     )

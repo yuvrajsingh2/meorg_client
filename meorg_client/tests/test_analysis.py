@@ -418,11 +418,40 @@ def test_server_errors_are_clear(tmp_path, status, body, expected):
         _prepare(client, tmp_path)
 
 
-def test_input_cli_writes_input_json(tmp_path, monkeypatch):
-    """The CLI accepts --model-output-files FILE FILE and prints the path."""
+def test_expand_model_output_files(tmp_path, monkeypatch):
+    """Patterns are expanded and sorted, value order is kept, repeats are dropped."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "out").mkdir()
+    for name in ("b.nc", "a.nc", "c.txt", "z.nc"):
+        (tmp_path / "out" / name).write_bytes(b"x")
+
+    paths = mea.expand_model_output_files(["out/z.nc", "out/*.nc", "out/c.txt"])
+
+    assert paths == [
+        tmp_path / "out" / "z.nc",
+        tmp_path / "out" / "a.nc",
+        tmp_path / "out" / "b.nc",
+        tmp_path / "out" / "c.txt",
+    ]
+    assert all(path.is_absolute() for path in paths)
+
+
+def test_pattern_that_matches_nothing_is_an_error(tmp_path):
+    with pytest.raises(AnalysisException, match="match the pattern"):
+        mea.expand_model_output_files([str(tmp_path / "*.nc")])
+
+
+def test_missing_literal_file_is_an_error(tmp_path):
+    with pytest.raises(AnalysisException, match="not found"):
+        _prepare(_client(), tmp_path, model_output_files=[tmp_path / "nope.nc"])
+
+
+def test_input_cli_expands_a_quoted_glob(tmp_path, monkeypatch):
+    """benchcab passes a quoted, relative pattern; input.json gets absolute paths."""
+    monkeypatch.chdir(tmp_path)
     local = tmp_path / "outputs"
     local.mkdir()
-    for name in ("a.nc", "b.nc"):
+    for name in ("b.nc", "a.nc"):
         (local / name).write_bytes(b"data")
     client = _client()
     monkeypatch.setattr(cli, "_get_client", lambda: client)
@@ -433,9 +462,9 @@ def test_input_cli_writes_input_json(tmp_path, monkeypatch):
             [
                 "analysis", "input", MO_ID, EXP_ID,
                 "--run-id", "run-1",
-                "--cache", str(tmp_path / "cache"),
-                "--model-output-files", str(local / "a.nc"), str(local / "b.nc"),
-                "-o", str(tmp_path / "run" / "input.json"),
+                "--cache", "cache",
+                "-o", "run/input.json",
+                "--model-output-files", "outputs/*.nc",
                 "-n", "2",
             ],
         )
@@ -444,20 +473,60 @@ def test_input_cli_writes_input_json(tmp_path, monkeypatch):
     # click 8.1 mixes stderr into stdout, so read the last line
     assert result.stdout.strip().splitlines()[-1] == str(tmp_path / "run" / "input.json")
     document = json.loads((tmp_path / "run" / "input.json").read_text())
-    names = [f["filename"] for f in document["files"] if f["number"] == 1 and f["type"] == "ModelOutput"]
-    assert names == ["a.nc", "b.nc"]
+    mo1 = [f for f in document["files"] if f["number"] == 1 and f["type"] == "ModelOutput"]
+    assert [f["filename"] for f in mo1] == ["a.nc", "b.nc"]
+    assert [f["path"] for f in mo1] == [str(local / "a.nc"), str(local / "b.nc")]
+    assert all(Path(f["path"]).is_absolute() for f in document["files"])
     assert SECRET not in result.output
 
 
-def test_input_cli_rejects_stray_arguments(tmp_path, monkeypatch):
-    """A file without --model-output-files is a usage error."""
+def test_input_cli_repeated_option(tmp_path, monkeypatch):
+    """--model-output-files is repeatable."""
+    for name in ("a.nc", "b.nc"):
+        (tmp_path / name).write_bytes(b"data")
+    client = _client()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    with patch("meorg_client.downloads.requests.get", side_effect=_object_get([])):
+        result = CliRunner().invoke(
+            cli.cli,
+            [
+                "analysis", "input", MO_ID, EXP_ID, "--run-id", "r", "--cache", str(tmp_path / "cache"),
+                "-o", str(tmp_path / "input.json"),
+                "--model-output-files", str(tmp_path / "b.nc"),
+                "--model-output-files", str(tmp_path / "a.nc"),
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    document = json.loads((tmp_path / "input.json").read_text())
+    names = [f["filename"] for f in document["files"] if f["number"] == 1 and f["type"] == "ModelOutput"]
+    assert names == ["b.nc", "a.nc"]
+
+
+def test_input_cli_pattern_without_match_exits_non_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_get_client", lambda: _client())
     result = CliRunner().invoke(
         cli.cli,
-        ["analysis", "input", MO_ID, EXP_ID, "stray.nc", "--run-id", "r", "--cache", str(tmp_path)],
+        [
+            "analysis", "input", MO_ID, EXP_ID, "--run-id", "r", "--cache", str(tmp_path / "cache"),
+            "-o", str(tmp_path / "input.json"), "--model-output-files", str(tmp_path / "*.nc"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "match the pattern" in result.output
+    assert not (tmp_path / "input.json").exists()
+
+
+def test_input_cli_rejects_stray_arguments(tmp_path, monkeypatch):
+    """An unquoted glob expanded by the shell leaves extra arguments: a usage error."""
+    monkeypatch.setattr(cli, "_get_client", lambda: _client())
+    result = CliRunner().invoke(
+        cli.cli,
+        [
+            "analysis", "input", MO_ID, EXP_ID, "--run-id", "r", "--cache", str(tmp_path),
+            "--model-output-files", "a.nc", "b.nc",
+        ],
     )
     assert result.exit_code != 0
-    assert "--model-output-files" in result.output
 
 
 def test_input_cli_exits_non_zero_on_409(tmp_path, monkeypatch):
@@ -682,3 +751,17 @@ def test_submit_cli_exits_non_zero_on_409(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "different terminal result" in result.output
     assert client.post_analysis_result.call_count == 1
+
+
+def test_submit_cli_failure_outcome_exits_zero(tmp_path, monkeypatch):
+    """A failed run that is stored (200) is a successful submission: exit 0."""
+    run = _run_dir(tmp_path, status="failure", stderr=True)
+    client = Client()
+    client.post_analysis_result = Mock(
+        return_value={"status": "success", "data": {"analysisId": "an-2", "status": "Error", "created": True}}
+    )
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    result = CliRunner().invoke(cli.cli, ["analysis", "submit-result", MO_ID, EXP_ID, str(run)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip().splitlines()[-1] == "an-2"
+    assert client.post_analysis_result.call_args.kwargs["outcome"] == "failure"

@@ -9,6 +9,7 @@ Signed URLs are bearer credentials. They are never written to disk and never
 put in an error message.
 """
 
+import glob
 import json
 import mimetypes as mt
 import os
@@ -184,12 +185,55 @@ def _check_entry(entry) -> dict:
     return entry
 
 
+def expand_model_output_files(values: Iterable) -> list:
+    """Expand model output file arguments into absolute paths.
+
+    Each value is a path or a glob pattern. The client expands patterns itself,
+    so a caller can pass a quoted pattern such as ``"outputs/*.nc"``. Matches
+    of one pattern are sorted. The order of the values is kept, and a path
+    named twice is used once.
+
+    Parameters
+    ----------
+    values : iterable of path-like
+        Paths or glob patterns, relative to the working directory or absolute.
+
+    Returns
+    -------
+    list of Path
+        Absolute paths.
+
+    Raises
+    ------
+    AnalysisException
+        When a pattern matches nothing.
+    """
+    paths = []
+    seen = set()
+    for value in values:
+        text = os.path.expanduser(str(value))
+        if glob.has_magic(text):
+            matches = sorted(glob.glob(text))
+            if not matches:
+                raise mx.AnalysisException(
+                    f"No model output files match the pattern: {value}"
+                )
+        else:
+            matches = [text]
+        for match in matches:
+            path = Path(os.path.abspath(match))
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
+
+
 def _local_model_output_entries(model_output: dict, paths: Iterable) -> list:
     """Build the model output 1 entries from local files."""
     entries = []
     seen = set()
-    for raw in paths:
-        path = Path(os.path.abspath(os.path.expanduser(str(raw))))
+    for path in expand_model_output_files(paths):
+        raw = path
         if not path.is_file():
             raise mx.AnalysisException(f"Model output file not found: {raw}")
         if path.name in seen:
@@ -402,7 +446,8 @@ def prepare_analysis_input(
     cache_ro : iterable of path-like, optional
         Read-only cache roots, searched first and never written.
     model_output_files : iterable of path-like, optional
-        Local files for model output 1. They replace the server's entries.
+        Local files or glob patterns for model output 1. They replace the
+        server's entries. See `expand_model_output_files`.
     n : int, optional
         Number of parallel downloads, by default 4.
     progress : bool, optional
