@@ -22,3 +22,6 @@ MEORG_BASE_URL_PROD = "https://modelevaluation.org/api"
 
 # Connect and read timeouts (seconds) for signed URL downloads
 DOWNLOAD_TIMEOUT = (10, 120)
+
+# Connect and read timeouts (seconds) for posting an analysis result
+ANALYSIS_RESULT_TIMEOUT = (10, 600)

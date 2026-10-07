@@ -2,7 +2,10 @@
 
 import requests
 import hashlib as hl
+import json
 import os
+import time
+from contextlib import ExitStack
 from typing import Union
 from urllib.parse import urljoin, urlencode
 from meorg_client.exceptions import RequestException
@@ -12,6 +15,8 @@ import meorg_client.exceptions as mx
 import meorg_client.utilities as mu
 import meorg_client.parallel as meop
 import meorg_client.downloads as med
+import meorg_client.analysis as mea
+from meorg_client import __version__
 import mimetypes as mt
 from pathlib import Path
 from tqdm import tqdm
@@ -284,6 +289,233 @@ class Client:
         ]
         med.download_files(jobs, n=n, progress=progress)
         return [target for _, target, _ in jobs]
+
+    def get_analysis_input(self, model_output_id: str, experiment_id: str) -> dict:
+        """Get the input files of an analysis, with signed download URLs.
+
+        Parameters
+        ----------
+        model_output_id : str
+            Model output ID.
+        experiment_id : str
+            Experiment ID.
+
+        Returns
+        -------
+        dict
+            Response from ME.org.
+        """
+        return self._make_request(
+            method=mcc.HTTP_GET,
+            endpoint=endpoints.ANALYSIS_INPUT,
+            url_path_fields=dict(id=model_output_id, expid=experiment_id),
+        )
+
+    def prepare_analysis_input(
+        self,
+        model_output_id: str,
+        experiment_id: str,
+        run_id: str,
+        cache: Union[str, Path],
+        cache_ro: list = (),
+        model_output_files: list = (),
+        n: int = 4,
+        progress: bool = True,
+    ) -> dict:
+        """Build the input.json of an analysis that runs outside ME.org.
+
+        ME.org chooses the input files. Each one is kept at
+        <cache root>/<object key>. The cache_ro roots, then cache, are
+        searched for the key with the right size. A miss is downloaded into
+        cache.
+
+        Parameters
+        ----------
+        model_output_id : str
+            Model output ID.
+        experiment_id : str
+            Experiment ID.
+        run_id : str
+            Run ID, written as _id.
+        cache : Union[str, Path]
+            Writable cache root.
+        cache_ro : list, optional
+            Read-only cache roots, searched first.
+        model_output_files : list, optional
+            Local files of the model output. They replace its files on ME.org.
+        n : int, optional
+            Number of download threads, by default 4.
+        progress : bool, optional
+            Show a progress bar, by default True.
+
+        Returns
+        -------
+        dict
+            input (the input.json document, without URLs), downloaded and
+            cached (numbers of objects).
+        """
+        data = self.get_analysis_input(model_output_id, experiment_id)["data"]
+        files = data["files"]
+
+        # Model output 1 is the model output under analysis.
+        own = [f for f in files if f["type"] == "ModelOutput" and f["number"] == 1]
+        if model_output_files:
+            files = [f for f in files if f not in own]
+        elif not own:
+            raise ValueError(
+                "The model output has no files on ME.org. Pass its local files."
+            )
+
+        # Benchmarks are also listed as model outputs, so look up each key once.
+        roots = [Path(root).absolute() for root in [*cache_ro, cache]]
+        paths, jobs = dict(), list()
+        for f in files:
+            if f["key"] in paths:
+                continue
+            candidates = [med.safe_join(root, f["key"]) for root in roots]
+            hits = [p for p in candidates if p.is_file() and p.stat().st_size == f["size"]]
+            paths[f["key"]] = hits[0] if hits else candidates[-1]
+            if not hits:
+                jobs.append((f["url"], candidates[-1], f["size"], f["filename"]))
+
+        med.download_files(jobs, n=n, progress=progress)
+
+        files = [
+            {**{k: v for k, v in f.items() if k != "url"}, "path": str(paths[f["key"]])}
+            for f in files
+        ]
+        if model_output_files:
+            first = next(
+                (i for i, f in enumerate(files) if f["type"] == "ModelOutput"),
+                len(files),
+            )
+            files[first:first] = mea.model_output_entries(
+                data["modelOutput"], model_output_files
+            )
+
+        return dict(
+            input={"_id": run_id, "config": data["config"], "files": files},
+            downloaded=len(jobs),
+            cached=len(paths) - len(jobs),
+        )
+
+    def post_analysis_result(
+        self,
+        model_output_id: str,
+        experiment_id: str,
+        outcome: str,
+        external_run_id: str,
+        runner: str,
+        metadata: dict,
+        files: list,
+    ) -> dict:
+        """Post the result of an analysis that ran outside ME.org.
+
+        Parameters
+        ----------
+        model_output_id : str
+            Model output ID.
+        experiment_id : str
+            Experiment ID.
+        outcome : str
+            success or failure.
+        external_run_id : str
+            Run ID.
+        runner : str
+            Runner name, such as gadi.
+        metadata : dict
+            Run metadata (run.json).
+        files : list
+            (part name, path) pairs.
+
+        Returns
+        -------
+        dict
+            Response from ME.org.
+        """
+        with ExitStack() as stack:
+            payload = [
+                ("file", (name, stack.enter_context(open(path, "rb"))))
+                for name, path in files
+            ]
+            return self._make_request(
+                method=mcc.HTTP_POST,
+                endpoint=endpoints.ANALYSIS_RESULT,
+                url_path_fields=dict(id=model_output_id, expid=experiment_id),
+                data=dict(
+                    outcome=outcome,
+                    externalRunId=external_run_id,
+                    runner=runner,
+                    metadata=json.dumps(metadata),
+                ),
+                files=payload,
+                timeout=mcc.ANALYSIS_RESULT_TIMEOUT,
+            )
+
+    def submit_analysis_result(
+        self,
+        model_output_id: str,
+        experiment_id: str,
+        run_dir: Union[str, Path],
+        input_path: Union[str, Path] = None,
+        runner: str = "gadi",
+        orchestrator: str = None,
+        retries: int = 3,
+        backoff: float = 5,
+    ) -> dict:
+        """Submit the run directory that meorg-run wrote.
+
+        A network error or a 5xx response is retried, waiting backoff
+        seconds and then twice as long each time. ME.org stores one result
+        per run ID, so a retry is safe.
+
+        Parameters
+        ----------
+        model_output_id : str
+            Model output ID.
+        experiment_id : str
+            Experiment ID.
+        run_dir : Union[str, Path]
+            Run directory.
+        input_path : Union[str, Path], optional
+            The input.json of the run, by default run_dir/input.json.
+        runner : str, optional
+            Runner name, by default gadi.
+        orchestrator : str, optional
+            Orchestrator name for the metadata, such as benchcab.
+        retries : int, optional
+            Number of retries, by default 3.
+        backoff : float, optional
+            First wait in seconds, by default 5.
+
+        Returns
+        -------
+        dict
+            Response from ME.org.
+        """
+        run_dir = Path(run_dir)
+        run = json.loads((run_dir / "run.json").read_text())
+        success = run.get("status") == "success"
+        metadata = dict(run, client="meorg_client", meorgClientVersion=__version__)
+        if orchestrator:
+            metadata["orchestrator"] = orchestrator
+        files = mea.result_parts(run_dir, input_path or run_dir / "input.json", success)
+
+        for attempt in range(retries + 1):
+            try:
+                return self.post_analysis_result(
+                    model_output_id,
+                    experiment_id,
+                    outcome="success" if success else "failure",
+                    external_run_id=run.get("externalRunId"),
+                    runner=runner,
+                    metadata=metadata,
+                    files=files,
+                )
+            except (RequestException, requests.exceptions.RequestException) as ex:
+                if attempt == retries or getattr(ex, "status_code", 500) < 500:
+                    raise
+                time.sleep(backoff * 2**attempt)
 
     def _upload_files_parallel(
         self,
