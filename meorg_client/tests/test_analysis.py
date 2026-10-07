@@ -201,7 +201,8 @@ def test_input_cli_writes_input_json(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == str(tmp_path / "input.json")
+    # The path is the last line; the counts go to stderr.
+    assert result.output.splitlines()[-1] == str(tmp_path / "input.json")
     assert json.loads((tmp_path / "input.json").read_text()) == {"_id": "run-1"}
     assert client.prepare_analysis_input.call_args.kwargs["model_output_files"] == (
         "out/r0.nc",
@@ -293,5 +294,5 @@ def test_submit_cli_prints_analysis_id(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert result.stdout == "an-1\n"
-    assert "already stored" in result.stderr
+    assert result.output.splitlines()[-1] == "an-1"
+    assert "already stored" in result.output
